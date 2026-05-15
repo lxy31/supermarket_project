@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { BadgePercent, ChevronDown, Flame, ListFilter, PackageOpen, ShoppingBag, TriangleAlert, X } from 'lucide-react'
+import { ArrowUpDown, BadgePercent, ChevronDown, Flame, ListFilter, PackageOpen, ShoppingBag, TriangleAlert, X } from 'lucide-react'
 
 type Product = {
   id: string
@@ -329,6 +329,7 @@ function App() {
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [isCategoryNavOpen, setIsCategoryNavOpen] = useState(true)
   const [activeProduct, setActiveProduct] = useState<Product | null>(null)
+  const [isSortOpen, setIsSortOpen] = useState(false)
 
   const cartMap = useMemo(() => new Map(cartItems.map((item) => [item.productId, item.quantity])), [cartItems])
 
@@ -418,6 +419,7 @@ function App() {
     { value: 'lowStock', label: '库存不足', icon: TriangleAlert },
     { value: 'promo', label: '促销商品', icon: BadgePercent },
   ] as const
+  const activeSortLabel = sortOptions.find((option) => option.value === sortBy)?.label ?? '排序'
 
   return (
     <div className="app-shell">
@@ -536,19 +538,33 @@ function App() {
           </div>
 
           <div className="sort-menu">
-            <span>排序</span>
-            <div className="sort-options" aria-label="排序">
-              {sortOptions.map((option) => (
-                <button
-                  className={sortBy === option.value ? 'active' : ''}
-                  key={option.value}
-                  onClick={() => setSortBy(option.value)}
-                  type="button"
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
+            <button
+              aria-expanded={isSortOpen}
+              className="sort-trigger"
+              onClick={() => setIsSortOpen((current) => !current)}
+              type="button"
+            >
+              <ArrowUpDown aria-hidden="true" size={17} />
+              <span>{activeSortLabel}</span>
+              <ChevronDown aria-hidden="true" size={15} />
+            </button>
+            {isSortOpen ? (
+              <div className="sort-options" aria-label="排序">
+                {sortOptions.map((option) => (
+                  <button
+                    className={sortBy === option.value ? 'active' : ''}
+                    key={option.value}
+                    onClick={() => {
+                      setSortBy(option.value)
+                      setIsSortOpen(false)
+                    }}
+                    type="button"
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
         </section>
 

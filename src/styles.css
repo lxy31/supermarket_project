@@ -258,24 +258,21 @@ h1 {
 
 .toolbar {
   align-items: end;
-  background: #ffffff;
-  border: 1px solid #dfe7e1;
-  border-radius: 8px;
+  background: transparent;
+  border: 0;
   display: grid;
-  gap: 14px;
-  grid-template-columns: minmax(260px, 1.4fr) minmax(360px, 2fr) 190px;
-  margin-bottom: 16px;
-  padding: 14px;
+  gap: 12px;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  margin: 6px 0 16px;
+  padding: 0;
 }
 
-.search-box,
-.sort-menu {
+.search-box {
   display: grid;
   gap: 7px;
 }
 
-.search-box span,
-.sort-menu > span {
+.search-box span {
   color: #59655d;
   font-size: 13px;
 }
@@ -292,17 +289,44 @@ h1 {
 }
 
 .sort-menu {
+  align-self: end;
   min-width: 0;
+  position: relative;
 }
 
-.sort-options {
+.sort-trigger {
+  align-items: center;
   background: #f8faf8;
   border: 1px solid #ccd8d0;
   border-radius: 8px;
+  color: #2d3a33;
+  display: flex;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.sort-trigger:hover,
+.sort-trigger[aria-expanded='true'] {
+  background: #e4f2e9;
+  border-color: #68a87d;
+  color: #176b38;
+}
+
+.sort-options {
+  background: #ffffff;
+  border: 1px solid #dce7e0;
+  border-radius: 8px;
+  box-shadow: 0 14px 34px rgba(13, 23, 18, 0.14);
   display: grid;
   gap: 4px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  padding: 4px;
+  min-width: 150px;
+  padding: 6px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 12;
 }
 
 .sort-options button {
@@ -310,9 +334,10 @@ h1 {
   border: 0;
   border-radius: 6px;
   color: #4d5a52;
-  font-size: 12px;
-  min-height: 28px;
-  padding: 0 6px;
+  font-size: 13px;
+  min-height: 32px;
+  padding: 0 10px;
+  text-align: left;
   white-space: nowrap;
 }
 
@@ -325,6 +350,7 @@ h1 {
 }
 
 .quick-filters {
+  align-self: end;
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(4, 46px);
