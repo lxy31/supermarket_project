@@ -1,5 +1,18 @@
 import { useMemo, useState } from 'react'
-import { ArrowUpDown, BadgePercent, ChevronDown, Flame, ListFilter, PackageOpen, ShoppingBag, TriangleAlert, X } from 'lucide-react'
+import {
+  ArrowUpDown,
+  BadgePercent,
+  Boxes,
+  ChevronDown,
+  ClipboardList,
+  Flame,
+  ListFilter,
+  PackageOpen,
+  Pencil,
+  ShoppingBag,
+  TriangleAlert,
+  X,
+} from 'lucide-react'
 
 type Product = {
   id: string
@@ -41,6 +54,9 @@ type SubCategory = {
 
 type SortBy = 'default' | 'priceAsc' | 'priceDesc' | 'stockAsc'
 type QuickFilter = 'all' | 'hot' | 'lowStock' | 'promo'
+type ActiveModule = 'purchase' | 'management'
+type ManagementTab = 'catalog' | 'create' | 'offShelf' | 'inventory'
+type InventoryFilter = 'all' | 'normal' | 'low' | 'out'
 
 const categories: Category[] = [
   { id: 'fresh', name: '生鲜果蔬', icon: 'F' },
@@ -64,7 +80,7 @@ const subCategories: SubCategory[] = [
   { id: 'laundry', categoryId: 'daily', name: '清洁洗护' },
 ]
 
-const products: Product[] = [
+const initialProducts: Product[] = [
   {
     id: 'p-001',
     name: '本地小番茄',
@@ -319,7 +335,24 @@ const sortOptions: Array<{ value: SortBy; label: string }> = [
   { value: 'stockAsc', label: '库存优先' },
 ]
 
+const managementSections: Array<{ value: ManagementTab; label: string }> = [
+  { value: 'catalog', label: '商品列表' },
+  { value: 'create', label: '新增商品' },
+  { value: 'offShelf', label: '下架管理' },
+  { value: 'inventory', label: '库存盘点' },
+]
+
+const managementSectionMeta: Record<ManagementTab, { icon: string; count: (products: Product[]) => string }> = {
+  catalog: { icon: 'L', count: (products) => String(products.length) },
+  create: { icon: '+', count: () => '录入' },
+  offShelf: { icon: 'D', count: (products) => String(products.filter((product) => product.stock === 0).length) },
+  inventory: { icon: 'I', count: () => '盘点' },
+}
+
 function App() {
+  const [products, setProducts] = useState<Product[]>(initialProducts)
+  const [activeModule, setActiveModule] = useState<ActiveModule>('purchase')
+  const [activeManagementTab, setActiveManagementTab] = useState<ManagementTab>('catalog')
   const [selectedCategoryId, setSelectedCategoryId] = useState('all')
   const [selectedSubCategoryId, setSelectedSubCategoryId] = useState('all')
   const [searchKeyword, setSearchKeyword] = useState('')
@@ -329,6 +362,7 @@ function App() {
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [isCategoryNavOpen, setIsCategoryNavOpen] = useState(true)
   const [activeProduct, setActiveProduct] = useState<Product | null>(null)
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [isSortOpen, setIsSortOpen] = useState(false)
 
   const cartMap = useMemo(() => new Map(cartItems.map((item) => [item.productId, item.quantity])), [cartItems])
@@ -402,15 +436,50 @@ function App() {
   }
 
   const selectCategory = (categoryId: string) => {
+    setActiveModule('purchase')
     setSelectedCategoryId(categoryId)
     setSelectedSubCategoryId('all')
     setIsCategoryNavOpen(true)
   }
 
   const resetProductView = () => {
+    setActiveModule('purchase')
     setSelectedCategoryId('all')
     setSelectedSubCategoryId('all')
     setIsCategoryNavOpen((current) => !current)
+  }
+
+  const updateProductStock = (productId: string, nextStock: number) => {
+    const safeStock = Math.max(0, Math.min(Math.round(nextStock), 999))
+    setProducts((current) =>
+      current.map((product) => (product.id === productId ? { ...product, stock: safeStock } : product)),
+    )
+    setCartItems((current) =>
+      current
+        .map((item) => (item.productId === productId ? { ...item, quantity: Math.min(item.quantity, safeStock) } : item))
+        .filter((item) => item.quantity > 0),
+    )
+  }
+
+  const saveProduct = (updatedProduct: Product) => {
+    const safeStock = Math.max(0, Math.min(Math.round(updatedProduct.stock), 999))
+    const safeProduct = {
+      ...updatedProduct,
+      price: Math.max(0, updatedProduct.price),
+      originalPrice: updatedProduct.originalPrice ? Math.max(0, updatedProduct.originalPrice) : undefined,
+      stock: safeStock,
+    }
+
+    setProducts((current) => current.map((product) => (product.id === safeProduct.id ? safeProduct : product)))
+    setCartItems((current) =>
+      current
+        .map((item) =>
+          item.productId === safeProduct.id ? { ...item, quantity: Math.min(item.quantity, safeStock) } : item,
+        )
+        .filter((item) => item.quantity > 0),
+    )
+    setActiveProduct((current) => (current?.id === safeProduct.id ? safeProduct : current))
+    setEditingProduct(null)
   }
 
   const quickFilters = [
@@ -433,7 +502,7 @@ function App() {
         </div>
 
         <nav className="nav-list" aria-label="系统菜单">
-          <div className={`nav-group ${isCategoryNavOpen ? 'active open' : 'active'}`}>
+          <div className={`nav-group ${activeModule === 'purchase' ? 'active' : ''} ${isCategoryNavOpen ? 'open' : ''}`}>
             <button
               aria-expanded={isCategoryNavOpen}
               className="nav-primary"
@@ -484,14 +553,51 @@ function App() {
               })}
             </div>
           </div>
-          <a href="#stock">库存管理</a>
+          <div className={`nav-group ${activeModule === 'management' ? 'active open' : ''}`}>
+            <button
+              aria-expanded={activeModule === 'management'}
+              className="nav-primary"
+              onClick={() => setActiveModule('management')}
+              type="button"
+            >
+              商品管理
+              <ChevronDown aria-hidden="true" size={16} />
+            </button>
+            <div
+              className="sidebar-categories management-subnav"
+              aria-label="商品管理二级目录"
+              hidden={activeModule !== 'management'}
+            >
+              {managementSections.map((section) => {
+                const meta = managementSectionMeta[section.value]
+
+                return (
+                  <div className="category-branch" key={section.value}>
+                    <button
+                      className={activeManagementTab === section.value ? 'active' : ''}
+                      onClick={() => {
+                        setActiveModule('management')
+                        setActiveManagementTab(section.value)
+                      }}
+                      type="button"
+                    >
+                      <span className="category-icon">{meta.icon}</span>
+                      <span>{section.label}</span>
+                      <strong>{meta.count(products)}</strong>
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
           <a href="#orders">订单记录</a>
           <a href="#members">会员中心</a>
           <a href="#reports">经营报表</a>
         </nav>
       </aside>
 
-      <main className="workspace" id="purchase">
+      {activeModule === 'purchase' ? (
+        <main className="workspace" id="purchase">
         <header className="topbar">
           <div>
             <p className="eyebrow">门店工作台</p>
@@ -686,39 +792,60 @@ function App() {
             subtotal={subtotal}
           />
         </div>
-      </main>
+        </main>
+      ) : (
+        <ProductManagementModule
+          activeTab={activeManagementTab}
+          onEditProduct={setEditingProduct}
+          onStockChange={updateProductStock}
+          onTabChange={setActiveManagementTab}
+          products={products}
+        />
+      )}
 
-      <button className="mobile-cart-bar" onClick={() => setIsCartOpen(true)} type="button">
-        <span>{cartCount} 件商品</span>
-        <strong>{formatCurrency(subtotal)}</strong>
-        <em>查看购物车</em>
-      </button>
+      {activeModule === 'purchase' ? (
+        <>
+          <button className="mobile-cart-bar" onClick={() => setIsCartOpen(true)} type="button">
+            <span>{cartCount} 件商品</span>
+            <strong>{formatCurrency(subtotal)}</strong>
+            <em>查看购物车</em>
+          </button>
 
-      <div className={`cart-drawer ${isCartOpen ? 'open' : ''}`} aria-hidden={!isCartOpen}>
-        <button className="drawer-backdrop" onClick={() => setIsCartOpen(false)} type="button" />
-        <div className="drawer-panel">
-          <div className="drawer-header">
-            <strong>购物车</strong>
-            <button onClick={() => setIsCartOpen(false)} type="button">
-              关闭
-            </button>
+          <div className={`cart-drawer ${isCartOpen ? 'open' : ''}`} aria-hidden={!isCartOpen}>
+            <button className="drawer-backdrop" onClick={() => setIsCartOpen(false)} type="button" />
+            <div className="drawer-panel">
+              <div className="drawer-header">
+                <strong>购物车</strong>
+                <button onClick={() => setIsCartOpen(false)} type="button">
+                  关闭
+                </button>
+              </div>
+              <CartPanel
+                cartCount={cartCount}
+                cartDetails={cartDetails}
+                onClear={() => setCartItems([])}
+                onQuantityChange={setProductQuantity}
+                savings={savings}
+                subtotal={subtotal}
+                variant="drawer"
+              />
+            </div>
           </div>
-          <CartPanel
-            cartCount={cartCount}
-            cartDetails={cartDetails}
-            onClear={() => setCartItems([])}
-            onQuantityChange={setProductQuantity}
-            savings={savings}
-            subtotal={subtotal}
-            variant="drawer"
-          />
-        </div>
-      </div>
+        </>
+      ) : null}
 
       {activeProduct ? (
         <ProductDetailDialog
           product={activeProduct}
           onClose={() => setActiveProduct(null)}
+        />
+      ) : null}
+
+      {editingProduct ? (
+        <EditProductDialog
+          product={editingProduct}
+          onClose={() => setEditingProduct(null)}
+          onSave={saveProduct}
         />
       ) : null}
     </div>
@@ -765,6 +892,697 @@ function ProductDetailDialog({ product, onClose }: ProductDetailDialogProps) {
           </div>
         </div>
       </article>
+    </div>
+  )
+}
+
+type EditProductDialogProps = {
+  product: Product
+  onClose: () => void
+  onSave: (product: Product) => void
+}
+
+function EditProductDialog({ product, onClose, onSave }: EditProductDialogProps) {
+  const [draft, setDraft] = useState({
+    name: product.name,
+    categoryId: product.categoryId,
+    subCategoryId: product.subCategoryId,
+    spec: product.spec,
+    price: String(product.price),
+    originalPrice: product.originalPrice ? String(product.originalPrice) : '',
+    stock: String(product.stock),
+    unit: product.unit,
+    origin: product.origin,
+    variety: product.variety,
+    tags: product.tags?.join('、') ?? '',
+    description: product.description,
+  })
+
+  const availableSubCategories = subCategories.filter((subCategory) => subCategory.categoryId === draft.categoryId)
+
+  const updateDraft = (field: keyof typeof draft, value: string) => {
+    setDraft((current) => {
+      if (field === 'categoryId') {
+        const nextSubCategory = subCategories.find((subCategory) => subCategory.categoryId === value)
+        return {
+          ...current,
+          categoryId: value,
+          subCategoryId: nextSubCategory?.id ?? current.subCategoryId,
+        }
+      }
+
+      return { ...current, [field]: value }
+    })
+  }
+
+  const submitEdit = () => {
+    const tags = draft.tags
+      .split(/[、,，]/)
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+
+    onSave({
+      ...product,
+      name: draft.name.trim() || product.name,
+      categoryId: draft.categoryId,
+      subCategoryId: draft.subCategoryId,
+      spec: draft.spec.trim() || product.spec,
+      price: Number(draft.price) || 0,
+      originalPrice: draft.originalPrice.trim() ? Number(draft.originalPrice) || undefined : undefined,
+      stock: Number(draft.stock) || 0,
+      unit: draft.unit.trim() || product.unit,
+      origin: draft.origin.trim() || product.origin,
+      variety: draft.variety.trim() || product.variety,
+      tags: tags.length > 0 ? tags : undefined,
+      description: draft.description.trim() || product.description,
+    })
+  }
+
+  const category = categories.find((item) => item.id === draft.categoryId)
+  const subCategory = subCategories.find((item) => item.id === draft.subCategoryId)
+
+  return (
+    <div className="product-modal" role="dialog" aria-modal="true" aria-labelledby="edit-product-title">
+      <button className="modal-backdrop" onClick={onClose} type="button" aria-label="关闭编辑商品" />
+      <article className="edit-product-card">
+        <aside
+          className="edit-product-visual"
+          style={{ backgroundImage: `url(${product.image})` }}
+          aria-label={product.name}
+        >
+          <div className="edit-product-visual-copy">
+            <span>{product.id.toUpperCase()}</span>
+            <strong>{draft.name || product.name}</strong>
+            <em>
+              {category?.name} / {subCategory?.name}
+            </em>
+          </div>
+        </aside>
+
+        <div className="edit-product-rule" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+
+        <section className="edit-product-editor">
+          <button className="modal-close edit-product-close" onClick={onClose} type="button" aria-label="关闭">
+            <X aria-hidden="true" size={18} />
+          </button>
+
+          <header className="edit-product-header">
+            <div>
+              <p className="eyebrow">商品资料</p>
+              <h2 id="edit-product-title">编辑商品</h2>
+              <span>{formatCurrency(Number(draft.price) || 0)}</span>
+            </div>
+          </header>
+
+          <div className="edit-product-body">
+            <form className="edit-product-form">
+            <label>
+              <span>商品名称</span>
+              <input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} />
+            </label>
+            <label>
+              <span>品类说明</span>
+              <input value={draft.variety} onChange={(event) => updateDraft('variety', event.target.value)} />
+            </label>
+            <label>
+              <span>一级分类</span>
+              <select value={draft.categoryId} onChange={(event) => updateDraft('categoryId', event.target.value)}>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>二级分类</span>
+              <select
+                value={draft.subCategoryId}
+                onChange={(event) => updateDraft('subCategoryId', event.target.value)}
+              >
+                {availableSubCategories.map((subCategory) => (
+                  <option key={subCategory.id} value={subCategory.id}>
+                    {subCategory.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>规格</span>
+              <input value={draft.spec} onChange={(event) => updateDraft('spec', event.target.value)} />
+            </label>
+            <label>
+              <span>单位</span>
+              <input value={draft.unit} onChange={(event) => updateDraft('unit', event.target.value)} />
+            </label>
+            <label>
+              <span>售价</span>
+              <input min={0} type="number" value={draft.price} onChange={(event) => updateDraft('price', event.target.value)} />
+            </label>
+            <label>
+              <span>原价</span>
+              <input
+                min={0}
+                placeholder="无促销原价可留空"
+                type="number"
+                value={draft.originalPrice}
+                onChange={(event) => updateDraft('originalPrice', event.target.value)}
+              />
+            </label>
+            <label>
+              <span>库存</span>
+              <input min={0} type="number" value={draft.stock} onChange={(event) => updateDraft('stock', event.target.value)} />
+            </label>
+            <label>
+              <span>产地</span>
+              <input value={draft.origin} onChange={(event) => updateDraft('origin', event.target.value)} />
+            </label>
+            <label className="edit-form-wide">
+              <span>标签</span>
+              <input
+                value={draft.tags}
+                onChange={(event) => updateDraft('tags', event.target.value)}
+                placeholder="用顿号或逗号分隔"
+              />
+            </label>
+            <label className="edit-form-wide">
+              <span>商品描述</span>
+              <textarea value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} />
+            </label>
+            </form>
+          </div>
+
+          <footer className="edit-product-footer">
+            <button onClick={onClose} type="button">
+              取消
+            </button>
+            <button className="primary-action" onClick={submitEdit} type="button">
+              保存修改
+            </button>
+          </footer>
+        </section>
+      </article>
+    </div>
+  )
+}
+
+type CatalogModuleProps = {
+  onEditProduct: (product: Product) => void
+  products: Product[]
+}
+
+type ProductManagementModuleProps = {
+  activeTab: ManagementTab
+  onEditProduct: (product: Product) => void
+  onStockChange: (productId: string, stock: number) => void
+  onTabChange: (tab: ManagementTab) => void
+  products: Product[]
+}
+
+function ProductManagementModule({
+  activeTab,
+  onEditProduct,
+  onStockChange,
+  onTabChange,
+  products,
+}: ProductManagementModuleProps) {
+  const statusLabel =
+    activeTab === 'inventory'
+      ? '实时盘点'
+      : activeTab === 'create'
+        ? '新增录入'
+        : activeTab === 'offShelf'
+          ? '下架维护'
+          : '资料维护'
+
+  return (
+    <main className="workspace management-workspace" id="management">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">商品后台</p>
+          <h1>商品管理</h1>
+          <div className="store-context" aria-label="商品管理范围">
+            <span>人民路店</span>
+            <span>资料维护、上下架与库存盘点</span>
+          </div>
+        </div>
+
+        <div className="store-meta">
+          <span className="status-dot" aria-hidden="true" />
+          <strong>{statusLabel}</strong>
+        </div>
+      </header>
+
+      <div className="mobile-management-tabs" aria-label="商品管理功能">
+        {managementSections.map((tab) => (
+          <button
+            className={activeTab === tab.value ? 'active' : ''}
+            key={tab.value}
+            onClick={() => onTabChange(tab.value)}
+            type="button"
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'catalog' ? (
+        <CatalogModule onEditProduct={onEditProduct} products={products} />
+      ) : activeTab === 'create' ? (
+        <CreateProductPanel />
+      ) : activeTab === 'offShelf' ? (
+        <OffShelfPanel products={products} />
+      ) : (
+        <InventoryModule products={products} onStockChange={onStockChange} />
+      )}
+    </main>
+  )
+}
+
+function CatalogModule({ onEditProduct, products }: CatalogModuleProps) {
+  const [searchKeyword, setSearchKeyword] = useState('')
+  const [selectedCategoryId, setSelectedCategoryId] = useState('all')
+
+  const keyword = searchKeyword.trim().toLowerCase()
+  const catalogRows = useMemo(
+    () =>
+      products.filter((product) => {
+        const matchesCategory = selectedCategoryId === 'all' || product.categoryId === selectedCategoryId
+        const matchesSearch =
+          !keyword ||
+          product.name.toLowerCase().includes(keyword) ||
+          product.spec.toLowerCase().includes(keyword) ||
+          product.variety.toLowerCase().includes(keyword)
+
+        return matchesCategory && matchesSearch
+      }),
+    [keyword, products, selectedCategoryId],
+  )
+
+  const onShelfCount = products.filter((product) => product.stock > 0).length
+  const offShelfCandidateCount = products.filter((product) => product.stock === 0).length
+  const promoCount = products.filter((product) => Boolean(product.originalPrice)).length
+
+  return (
+    <div className="catalog-workspace" id="catalog">
+      <section className="catalog-summary" aria-label="商品资料概览">
+        <article>
+          <span>全部 SKU</span>
+          <strong>{products.length}</strong>
+        </article>
+        <article>
+          <span>当前可售</span>
+          <strong>{onShelfCount}</strong>
+        </article>
+        <article>
+          <span>缺货待处理</span>
+          <strong>{offShelfCandidateCount}</strong>
+        </article>
+        <article>
+          <span>促销商品</span>
+          <strong>{promoCount}</strong>
+        </article>
+      </section>
+
+      <section className="catalog-panel" aria-label="商品资料列表">
+        <div className="catalog-toolbar">
+          <label className="search-box">
+            <span>搜索商品</span>
+            <input
+              value={searchKeyword}
+              onChange={(event) => setSearchKeyword(event.target.value)}
+              placeholder="商品名、规格或品类"
+            />
+          </label>
+
+          <label className="inventory-select">
+            <span>分类</span>
+            <select value={selectedCategoryId} onChange={(event) => setSelectedCategoryId(event.target.value)}>
+              <option value="all">全部分类</option>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="catalog-list">
+          {catalogRows.map((product) => {
+            const category = categories.find((item) => item.id === product.categoryId)
+            const subCategory = subCategories.find((item) => item.id === product.subCategoryId)
+            const isOutOfStock = product.stock === 0
+
+            return (
+              <article
+                className="catalog-item"
+                key={product.id}
+                style={{ backgroundImage: `linear-gradient(90deg, rgba(255, 255, 255, 0.78) 0%, rgba(255, 255, 255, 0.92) 38%, rgba(255, 255, 255, 0.98) 100%), url(${product.image})` }}
+              >
+                <img alt={product.name} src={product.image} />
+                <div className="catalog-item-main">
+                  <div className="catalog-title-row">
+                    <h3>{product.name}</h3>
+                    <span>{product.id.toUpperCase()}</span>
+                  </div>
+                  <p>{product.variety}</p>
+                  <div className="catalog-meta-line">
+                    <span>
+                      {category?.name} / {subCategory?.name}
+                    </span>
+                    <span>{product.spec}</span>
+                    <span>{product.origin}</span>
+                    <span>
+                      库存 {product.stock}{product.unit}
+                    </span>
+                  </div>
+                  <div className="catalog-label-row">
+                    {(product.tags ?? ['常规']).map((tag) => (
+                      <span key={tag}>{tag}</span>
+                    ))}
+                  </div>
+                </div>
+                <strong>{formatCurrency(product.price)}</strong>
+                <span className={`catalog-state ${isOutOfStock ? 'off' : 'on'}`}>
+                  {isOutOfStock ? '待下架处理' : '可售'}
+                </span>
+                <div className="catalog-item-actions">
+                  <button
+                    aria-label={`编辑${product.name}`}
+                    onClick={() => onEditProduct(product)}
+                    title="编辑"
+                    type="button"
+                  >
+                    <Pencil aria-hidden="true" size={17} />
+                  </button>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function CreateProductPanel() {
+  return (
+    <section className="create-product-panel" aria-label="新增商品表单">
+      <div className="section-heading">
+        <div>
+          <h2>新增商品</h2>
+          <span>先预留录入字段，后续可接保存接口</span>
+        </div>
+      </div>
+
+      <form className="product-form">
+        <label>
+          <span>商品名称</span>
+          <input placeholder="例如：有机西兰花" />
+        </label>
+        <label>
+          <span>规格</span>
+          <input placeholder="例如：300g/份" />
+        </label>
+        <label>
+          <span>所属分类</span>
+          <select defaultValue="">
+            <option value="" disabled>
+              选择分类
+            </option>
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>售价</span>
+          <input min={0} placeholder="0.00" type="number" />
+        </label>
+        <label>
+          <span>初始库存</span>
+          <input min={0} placeholder="0" type="number" />
+        </label>
+        <label>
+          <span>产地</span>
+          <input placeholder="例如：山东寿光" />
+        </label>
+        <label className="form-wide">
+          <span>商品描述</span>
+          <textarea placeholder="补充商品特点、陈列建议或保存方式" />
+        </label>
+        <div className="form-actions">
+          <button type="button">保存草稿</button>
+          <button className="primary-action" type="button">
+            提交新增
+          </button>
+        </div>
+      </form>
+    </section>
+  )
+}
+
+type OffShelfPanelProps = {
+  products: Product[]
+}
+
+function OffShelfPanel({ products }: OffShelfPanelProps) {
+  const offShelfCandidates = products.filter((product) => product.stock === 0)
+  const activeProducts = products.filter((product) => product.stock > 0)
+
+  return (
+    <section className="off-shelf-panel" aria-label="下架管理">
+      <div className="section-heading">
+        <div>
+          <h2>下架管理</h2>
+          <span>缺货商品优先处理，仍有库存的商品可先做人工复核</span>
+        </div>
+      </div>
+
+      <div className="off-shelf-layout">
+        <div className="off-shelf-column">
+          <h3>待处理</h3>
+          {offShelfCandidates.map((product) => (
+            <article key={product.id}>
+              <img alt={product.name} src={product.image} />
+              <div>
+                <strong>{product.name}</strong>
+                <span>{product.spec} · 库存 {product.stock}</span>
+              </div>
+              <button type="button">标记下架</button>
+            </article>
+          ))}
+        </div>
+
+        <div className="off-shelf-column">
+          <h3>可售复核</h3>
+          {activeProducts.slice(0, 5).map((product) => (
+            <article key={product.id}>
+              <img alt={product.name} src={product.image} />
+              <div>
+                <strong>{product.name}</strong>
+                <span>{product.spec} · 库存 {product.stock}</span>
+              </div>
+              <button type="button">复核</button>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+type InventoryModuleProps = {
+  products: Product[]
+  onStockChange: (productId: string, stock: number) => void
+}
+
+const getInventoryStatus = (stock: number) => {
+  if (stock === 0) return { key: 'out' as const, label: '缺货', tone: 'danger' }
+  if (stock <= 8) return { key: 'low' as const, label: '需补货', tone: 'warning' }
+  return { key: 'normal' as const, label: '正常', tone: 'success' }
+}
+
+function InventoryModule({ products, onStockChange }: InventoryModuleProps) {
+  const [searchKeyword, setSearchKeyword] = useState('')
+  const [selectedCategoryId, setSelectedCategoryId] = useState('all')
+  const [activeFilter, setActiveFilter] = useState<InventoryFilter>('all')
+
+  const keyword = searchKeyword.trim().toLowerCase()
+  const inventoryRows = useMemo(
+    () =>
+      products.filter((product) => {
+        const status = getInventoryStatus(product.stock)
+        const matchesCategory = selectedCategoryId === 'all' || product.categoryId === selectedCategoryId
+        const matchesStatus = activeFilter === 'all' || status.key === activeFilter
+        const matchesSearch =
+          !keyword ||
+          product.name.toLowerCase().includes(keyword) ||
+          product.spec.toLowerCase().includes(keyword) ||
+          product.origin.toLowerCase().includes(keyword)
+
+        return matchesCategory && matchesStatus && matchesSearch
+      }),
+    [activeFilter, keyword, products, selectedCategoryId],
+  )
+
+  const stockTotal = products.reduce((sum, product) => sum + product.stock, 0)
+  const lowStockCount = products.filter((product) => product.stock > 0 && product.stock <= 8).length
+  const outOfStockCount = products.filter((product) => product.stock === 0).length
+  const stockValue = products.reduce((sum, product) => sum + product.stock * product.price, 0)
+  const restockRows = products
+    .filter((product) => product.stock <= 8)
+    .sort((first, second) => first.stock - second.stock)
+    .slice(0, 5)
+
+  const inventoryFilters = [
+    { value: 'all', label: '全部商品', count: products.length },
+    { value: 'normal', label: '库存正常', count: products.length - lowStockCount - outOfStockCount },
+    { value: 'low', label: '需补货', count: lowStockCount },
+    { value: 'out', label: '缺货', count: outOfStockCount },
+  ] as const
+
+  return (
+    <div className="inventory-workspace" id="stock">
+      <section className="inventory-kpis" aria-label="库存概览">
+        <article>
+          <Boxes aria-hidden="true" size={22} />
+          <span>库存总数</span>
+          <strong>{stockTotal}</strong>
+        </article>
+        <article>
+          <TriangleAlert aria-hidden="true" size={22} />
+          <span>需补货</span>
+          <strong>{lowStockCount}</strong>
+        </article>
+        <article>
+          <PackageOpen aria-hidden="true" size={22} />
+          <span>缺货 SKU</span>
+          <strong>{outOfStockCount}</strong>
+        </article>
+        <article>
+          <ClipboardList aria-hidden="true" size={22} />
+          <span>库存金额</span>
+          <strong>{formatCurrency(stockValue)}</strong>
+        </article>
+      </section>
+
+      <section className="inventory-layout">
+        <div className="inventory-main">
+          <section className="inventory-toolbar" aria-label="库存筛选">
+            <label className="search-box">
+              <span>搜索库存</span>
+              <input
+                value={searchKeyword}
+                onChange={(event) => setSearchKeyword(event.target.value)}
+                placeholder="商品名、规格或产地"
+              />
+            </label>
+
+            <label className="inventory-select">
+              <span>分类</span>
+              <select value={selectedCategoryId} onChange={(event) => setSelectedCategoryId(event.target.value)}>
+                <option value="all">全部分类</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </section>
+
+          <div className="inventory-tabs" aria-label="库存状态">
+            {inventoryFilters.map((filter) => (
+              <button
+                className={activeFilter === filter.value ? 'active' : ''}
+                key={filter.value}
+                onClick={() => setActiveFilter(filter.value)}
+                type="button"
+              >
+                <span>{filter.label}</span>
+                <strong>{filter.count}</strong>
+              </button>
+            ))}
+          </div>
+
+          <section className="inventory-table-card" aria-label="库存列表">
+            <div className="inventory-table-head">
+              <span>商品</span>
+              <span>分类</span>
+              <span>售价</span>
+              <span>库存</span>
+              <span>状态</span>
+            </div>
+
+            <div className="inventory-table-body">
+              {inventoryRows.map((product) => {
+                const status = getInventoryStatus(product.stock)
+                const category = categories.find((item) => item.id === product.categoryId)
+                const subCategory = subCategories.find((item) => item.id === product.subCategoryId)
+
+                return (
+                  <article className="inventory-row" key={product.id}>
+                    <div className="inventory-product">
+                      <img alt={product.name} src={product.image} />
+                      <div>
+                        <h3>{product.name}</h3>
+                        <p>{product.spec} · {product.origin}</p>
+                      </div>
+                    </div>
+                    <span>{category?.name} / {subCategory?.name}</span>
+                    <strong>{formatCurrency(product.price)}</strong>
+                    <div className="stock-stepper" aria-label={`${product.name} 库存`}>
+                      <button onClick={() => onStockChange(product.id, product.stock - 1)} type="button">
+                        -
+                      </button>
+                      <input
+                        aria-label="库存数量"
+                        min={0}
+                        onChange={(event) => onStockChange(product.id, Number(event.target.value))}
+                        type="number"
+                        value={product.stock}
+                      />
+                      <button onClick={() => onStockChange(product.id, product.stock + 1)} type="button">
+                        +
+                      </button>
+                    </div>
+                    <span className={`stock-status ${status.tone}`}>{status.label}</span>
+                  </article>
+                )
+              })}
+            </div>
+          </section>
+        </div>
+
+        <aside className="restock-panel" aria-label="补货提醒">
+          <div className="section-heading">
+            <div>
+              <h2>补货提醒</h2>
+              <span>低于 8 件自动进入列表</span>
+            </div>
+          </div>
+
+          <div className="restock-list">
+            {restockRows.map((product) => (
+              <article key={product.id}>
+                <div>
+                  <h3>{product.name}</h3>
+                  <p>{product.spec}</p>
+                </div>
+                <strong>{product.stock === 0 ? '缺货' : `${product.stock} ${product.unit}`}</strong>
+              </article>
+            ))}
+          </div>
+        </aside>
+      </section>
     </div>
   )
 }
