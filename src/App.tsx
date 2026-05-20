@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
 import {
   ArrowUpDown,
   BadgePercent,
@@ -6,9 +6,11 @@ import {
   ChevronDown,
   ClipboardList,
   Flame,
+  ImagePlus,
   ListFilter,
   PackageOpen,
   Pencil,
+  RotateCcw,
   ShoppingBag,
   TriangleAlert,
   X,
@@ -393,7 +395,7 @@ function App() {
       if (sortBy === 'stockAsc') return first.stock - second.stock
       return 0
     })
-  }, [activeQuickFilter, searchKeyword, selectedCategoryId, selectedSubCategoryId, sortBy])
+  }, [activeQuickFilter, products, searchKeyword, selectedCategoryId, selectedSubCategoryId, sortBy])
 
   const cartDetails = useMemo(
     () =>
@@ -480,6 +482,27 @@ function App() {
     )
     setActiveProduct((current) => (current?.id === safeProduct.id ? safeProduct : current))
     setEditingProduct(null)
+  }
+
+  const createProduct = (product: Omit<Product, 'id'>) => {
+    const nextNumber =
+      products.reduce((highest, current) => {
+        const numericId = Number(current.id.replace(/\D/g, ''))
+        return Number.isNaN(numericId) ? highest : Math.max(highest, numericId)
+      }, 0) + 1
+    const safeStock = Math.max(0, Math.min(Math.round(product.stock), 999))
+
+    setProducts((current) => [
+      ...current,
+      {
+        ...product,
+        id: `p-${String(nextNumber).padStart(3, '0')}`,
+        price: Math.max(0, product.price),
+        originalPrice: product.originalPrice ? Math.max(0, product.originalPrice) : undefined,
+        stock: safeStock,
+      },
+    ])
+    setActiveManagementTab('catalog')
   }
 
   const quickFilters = [
@@ -797,6 +820,7 @@ function App() {
         <ProductManagementModule
           activeTab={activeManagementTab}
           onEditProduct={setEditingProduct}
+          onCreateProduct={createProduct}
           onStockChange={updateProductStock}
           onTabChange={setActiveManagementTab}
           products={products}
@@ -915,6 +939,7 @@ function EditProductDialog({ product, onClose, onSave }: EditProductDialogProps)
     origin: product.origin,
     variety: product.variety,
     tags: product.tags?.join('、') ?? '',
+    image: product.image,
     description: product.description,
   })
 
@@ -933,6 +958,23 @@ function EditProductDialog({ product, onClose, onSave }: EditProductDialogProps)
 
       return { ...current, [field]: value }
     })
+  }
+
+  const handleImageFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+
+    if (!file) {
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        updateDraft('image', reader.result)
+      }
+    }
+    reader.readAsDataURL(file)
+    event.target.value = ''
   }
 
   const submitEdit = () => {
@@ -954,6 +996,7 @@ function EditProductDialog({ product, onClose, onSave }: EditProductDialogProps)
       origin: draft.origin.trim() || product.origin,
       variety: draft.variety.trim() || product.variety,
       tags: tags.length > 0 ? tags : undefined,
+      image: draft.image.trim() || product.image,
       description: draft.description.trim() || product.description,
     })
   }
@@ -967,7 +1010,7 @@ function EditProductDialog({ product, onClose, onSave }: EditProductDialogProps)
       <article className="edit-product-card">
         <aside
           className="edit-product-visual"
-          style={{ backgroundImage: `url(${product.image})` }}
+          style={{ backgroundImage: `url(${draft.image.trim() || product.image})` }}
           aria-label={product.name}
         >
           <div className="edit-product-visual-copy">
@@ -1061,6 +1104,28 @@ function EditProductDialog({ product, onClose, onSave }: EditProductDialogProps)
               <span>产地</span>
               <input value={draft.origin} onChange={(event) => updateDraft('origin', event.target.value)} />
             </label>
+            <div className="edit-form-wide edit-form-group">
+              <span>商品图片</span>
+              <div className="edit-image-field">
+                <input
+                  aria-label="商品图片链接"
+                  value={draft.image}
+                  onChange={(event) => updateDraft('image', event.target.value)}
+                  placeholder="粘贴图片链接，或选择本地图片"
+                />
+                <div className="edit-image-actions">
+                  <label className="image-upload-action">
+                    <ImagePlus aria-hidden="true" size={16} />
+                    <span>选择图片</span>
+                    <input accept="image/*" type="file" onChange={handleImageFileChange} />
+                  </label>
+                  <button onClick={() => updateDraft('image', product.image)} type="button">
+                    <RotateCcw aria-hidden="true" size={16} />
+                    <span>恢复原图</span>
+                  </button>
+                </div>
+              </div>
+            </div>
             <label className="edit-form-wide">
               <span>标签</span>
               <input
@@ -1097,6 +1162,7 @@ type CatalogModuleProps = {
 
 type ProductManagementModuleProps = {
   activeTab: ManagementTab
+  onCreateProduct: (product: Omit<Product, 'id'>) => void
   onEditProduct: (product: Product) => void
   onStockChange: (productId: string, stock: number) => void
   onTabChange: (tab: ManagementTab) => void
@@ -1105,6 +1171,7 @@ type ProductManagementModuleProps = {
 
 function ProductManagementModule({
   activeTab,
+  onCreateProduct,
   onEditProduct,
   onStockChange,
   onTabChange,
@@ -1153,7 +1220,7 @@ function ProductManagementModule({
       {activeTab === 'catalog' ? (
         <CatalogModule onEditProduct={onEditProduct} products={products} />
       ) : activeTab === 'create' ? (
-        <CreateProductPanel />
+        <CreateProductPanel onCreateProduct={onCreateProduct} />
       ) : activeTab === 'offShelf' ? (
         <OffShelfPanel products={products} />
       ) : (
@@ -1290,31 +1357,145 @@ function CatalogModule({ onEditProduct, products }: CatalogModuleProps) {
   )
 }
 
-function CreateProductPanel() {
+type CreateProductPanelProps = {
+  onCreateProduct: (product: Omit<Product, 'id'>) => void
+}
+
+function CreateProductPanel({ onCreateProduct }: CreateProductPanelProps) {
+  const [draft, setDraft] = useState({
+    name: '',
+    categoryId: categories[0]?.id ?? '',
+    subCategoryId: subCategories.find((subCategory) => subCategory.categoryId === categories[0]?.id)?.id ?? '',
+    image: '',
+    spec: '',
+    price: '',
+    originalPrice: '',
+    stock: '',
+    unit: '',
+    tags: '',
+    origin: '',
+    variety: '',
+    description: '',
+  })
+
+  const availableSubCategories = subCategories.filter((subCategory) => subCategory.categoryId === draft.categoryId)
+  const imagePreview = draft.image.trim()
+  const selectedCategory = categories.find((category) => category.id === draft.categoryId)
+  const selectedSubCategory = subCategories.find((subCategory) => subCategory.id === draft.subCategoryId)
+
+  const updateDraft = (field: keyof typeof draft, value: string) => {
+    setDraft((current) => {
+      if (field === 'categoryId') {
+        const nextSubCategory = subCategories.find((subCategory) => subCategory.categoryId === value)
+        return {
+          ...current,
+          categoryId: value,
+          subCategoryId: nextSubCategory?.id ?? '',
+        }
+      }
+
+      return { ...current, [field]: value }
+    })
+  }
+
+  const resetDraft = () => {
+    const defaultCategoryId = categories[0]?.id ?? ''
+    const defaultSubCategoryId =
+      subCategories.find((subCategory) => subCategory.categoryId === defaultCategoryId)?.id ?? ''
+
+    setDraft({
+      name: '',
+      categoryId: defaultCategoryId,
+      subCategoryId: defaultSubCategoryId,
+      image: '',
+      spec: '',
+      price: '',
+      originalPrice: '',
+      stock: '',
+      unit: '',
+      tags: '',
+      origin: '',
+      variety: '',
+      description: '',
+    })
+  }
+
+  const handleImageFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+
+    if (!file) {
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        updateDraft('image', reader.result)
+      }
+    }
+    reader.readAsDataURL(file)
+    event.target.value = ''
+  }
+
+  const submitProduct = () => {
+    const tags = draft.tags
+      .split(/[、,，]/)
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+    const name = draft.name.trim()
+    const fallbackDescription = '新录入商品，可在商品资料中继续完善陈列、保存与推荐信息。'
+
+    onCreateProduct({
+      name: name || '未命名商品',
+      categoryId: draft.categoryId,
+      subCategoryId: draft.subCategoryId || availableSubCategories[0]?.id || '',
+      image:
+        imagePreview ||
+        'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=640&q=80',
+      spec: draft.spec.trim() || '常规规格',
+      price: Number(draft.price) || 0,
+      originalPrice: draft.originalPrice.trim() ? Number(draft.originalPrice) || undefined : undefined,
+      stock: Number(draft.stock) || 0,
+      unit: draft.unit.trim() || '件',
+      tags: tags.length > 0 ? tags : undefined,
+      origin: draft.origin.trim() || '待补充',
+      variety: draft.variety.trim() || selectedSubCategory?.name || '常规商品',
+      description: draft.description.trim() || fallbackDescription,
+      knowledge: [
+        { title: '商品定位', body: draft.variety.trim() || selectedSubCategory?.name || '常规商品' },
+        { title: '陈列建议', body: draft.description.trim() || fallbackDescription },
+        { title: '维护提示', body: '新增后可在商品列表中继续编辑价格、库存、标签和图片。' },
+      ],
+    })
+    resetDraft()
+  }
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    submitProduct()
+  }
+
   return (
     <section className="create-product-panel" aria-label="新增商品表单">
       <div className="section-heading">
         <div>
           <h2>新增商品</h2>
-          <span>先预留录入字段，后续可接保存接口</span>
+          <span>录入商品资料、分类、价格库存与展示图片</span>
         </div>
       </div>
 
-      <form className="product-form">
+      <form className="product-form" onSubmit={handleSubmit}>
         <label>
           <span>商品名称</span>
-          <input placeholder="例如：有机西兰花" />
+          <input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder="例如：有机西兰花" />
         </label>
         <label>
-          <span>规格</span>
-          <input placeholder="例如：300g/份" />
+          <span>品类说明</span>
+          <input value={draft.variety} onChange={(event) => updateDraft('variety', event.target.value)} placeholder="例如：绿花菜" />
         </label>
         <label>
-          <span>所属分类</span>
-          <select defaultValue="">
-            <option value="" disabled>
-              选择分类
-            </option>
+          <span>一级分类</span>
+          <select value={draft.categoryId} onChange={(event) => updateDraft('categoryId', event.target.value)}>
             {categories.map((category) => (
               <option key={category.id} value={category.id}>
                 {category.name}
@@ -1323,24 +1504,98 @@ function CreateProductPanel() {
           </select>
         </label>
         <label>
+          <span>二级分类</span>
+          <select value={draft.subCategoryId} onChange={(event) => updateDraft('subCategoryId', event.target.value)}>
+            {availableSubCategories.map((subCategory) => (
+              <option key={subCategory.id} value={subCategory.id}>
+                {subCategory.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>规格</span>
+          <input value={draft.spec} onChange={(event) => updateDraft('spec', event.target.value)} placeholder="例如：300g/份" />
+        </label>
+        <label>
+          <span>单位</span>
+          <input value={draft.unit} onChange={(event) => updateDraft('unit', event.target.value)} placeholder="例如：份" />
+        </label>
+        <label>
           <span>售价</span>
-          <input min={0} placeholder="0.00" type="number" />
+          <input min={0} value={draft.price} onChange={(event) => updateDraft('price', event.target.value)} placeholder="0.00" type="number" />
+        </label>
+        <label>
+          <span>原价</span>
+          <input
+            min={0}
+            value={draft.originalPrice}
+            onChange={(event) => updateDraft('originalPrice', event.target.value)}
+            placeholder="无促销原价可留空"
+            type="number"
+          />
         </label>
         <label>
           <span>初始库存</span>
-          <input min={0} placeholder="0" type="number" />
+          <input min={0} value={draft.stock} onChange={(event) => updateDraft('stock', event.target.value)} placeholder="0" type="number" />
         </label>
         <label>
           <span>产地</span>
-          <input placeholder="例如：山东寿光" />
+          <input value={draft.origin} onChange={(event) => updateDraft('origin', event.target.value)} placeholder="例如：山东寿光" />
+        </label>
+        <div className="form-wide product-form-group">
+          <span>商品图片</span>
+          <div className="product-image-entry">
+            <div
+              className={`product-image-preview ${imagePreview ? '' : 'empty'}`}
+              style={imagePreview ? { backgroundImage: `url(${imagePreview})` } : undefined}
+              aria-label="商品图片预览"
+            >
+              <span>{imagePreview ? draft.name || '商品预览' : '暂无图片'}</span>
+              <strong>
+                {selectedCategory?.name} / {selectedSubCategory?.name}
+              </strong>
+            </div>
+            <div className="product-image-fields">
+              <input
+                aria-label="新增商品图片链接"
+                value={draft.image}
+                onChange={(event) => updateDraft('image', event.target.value)}
+                placeholder="粘贴图片链接，或选择本地图片"
+              />
+              <div className="image-entry-actions">
+                <label className="image-upload-action">
+                  <ImagePlus aria-hidden="true" size={16} />
+                  <span>选择图片</span>
+                  <input accept="image/*" type="file" onChange={handleImageFileChange} />
+                </label>
+                <button onClick={() => updateDraft('image', '')} type="button">
+                  <RotateCcw aria-hidden="true" size={16} />
+                  <span>清空图片</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <label className="form-wide">
+          <span>标签</span>
+          <input
+            value={draft.tags}
+            onChange={(event) => updateDraft('tags', event.target.value)}
+            placeholder="用顿号或逗号分隔，例如：促销、今日热销"
+          />
         </label>
         <label className="form-wide">
           <span>商品描述</span>
-          <textarea placeholder="补充商品特点、陈列建议或保存方式" />
+          <textarea
+            value={draft.description}
+            onChange={(event) => updateDraft('description', event.target.value)}
+            placeholder="补充商品特点、陈列建议或保存方式"
+          />
         </label>
         <div className="form-actions">
-          <button type="button">保存草稿</button>
-          <button className="primary-action" type="button">
+          <button onClick={resetDraft} type="button">重置表单</button>
+          <button className="primary-action" type="submit">
             提交新增
           </button>
         </div>
