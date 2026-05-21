@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent, type FormEvent, type MouseEvent, type PointerEvent } from 'react'
 import {
   ArrowUpDown,
   BadgePercent,
@@ -63,6 +63,18 @@ type InventoryFilter = 'all' | 'normal' | 'low' | 'out'
 type NewProductInput = Omit<Product, 'id' | 'categoryId' | 'subCategoryId'> & {
   categoryName: string
   subCategoryName: string
+}
+
+const updateLiquidLens = (event: PointerEvent<HTMLElement>) => {
+  const target = event.currentTarget
+  const rect = target.getBoundingClientRect()
+  target.style.setProperty('--liquid-x', `${event.clientX - rect.left}px`)
+  target.style.setProperty('--liquid-y', `${event.clientY - rect.top}px`)
+  target.style.setProperty('--liquid-opacity', '1')
+}
+
+const resetLiquidLens = (event: PointerEvent<HTMLElement>) => {
+  event.currentTarget.style.removeProperty('--liquid-opacity')
 }
 
 const initialCategories: Category[] = [
@@ -590,6 +602,8 @@ function App() {
                     <button
                       className={selectedCategoryId === category.id ? 'active' : ''}
                       onClick={() => selectCategory(category.id)}
+                      onPointerLeave={resetLiquidLens}
+                      onPointerMove={updateLiquidLens}
                       type="button"
                     >
                       <span className="category-icon">{category.icon}</span>
@@ -607,6 +621,8 @@ function App() {
                               className={selectedSubCategoryId === subCategory.id ? 'active' : ''}
                               key={subCategory.id}
                               onClick={() => setSelectedSubCategoryId(subCategory.id)}
+                              onPointerLeave={resetLiquidLens}
+                              onPointerMove={updateLiquidLens}
                               type="button"
                             >
                               <span>{subCategory.name}</span>
@@ -625,7 +641,10 @@ function App() {
             <button
               aria-expanded={activeModule === 'management'}
               className="nav-primary"
-              onClick={() => setActiveModule('management')}
+              onClick={() => {
+                setActiveModule('management')
+                setIsCategoryNavOpen(false)
+              }}
               type="button"
             >
               商品管理
@@ -645,8 +664,11 @@ function App() {
                       className={activeManagementTab === section.value ? 'active' : ''}
                       onClick={() => {
                         setActiveModule('management')
+                        setIsCategoryNavOpen(false)
                         setActiveManagementTab(section.value)
                       }}
+                      onPointerLeave={resetLiquidLens}
+                      onPointerMove={updateLiquidLens}
                       type="button"
                     >
                       <span className="category-icon">{meta.icon}</span>
@@ -1223,6 +1245,15 @@ function ProductManagementModule({
   subCategories,
 }: ProductManagementModuleProps) {
   const statusLabel = managementSections.find((section) => section.value === activeTab)?.label ?? '商品列表'
+  const offShelfCandidateCount = products.filter((product) => product.stock === 0).length
+  const headerMeta =
+    activeTab === 'catalog'
+      ? ''
+      : activeTab === 'offShelf'
+        ? `${offShelfCandidateCount} 个待处理`
+        : activeTab === 'inventory'
+          ? '库存盘点'
+          : statusLabel
   const pageDescription =
     activeTab === 'create'
       ? '创建商品资料，支持多级分类、图片上传、价格库存与销售说明。'
@@ -1252,12 +1283,12 @@ function ProductManagementModule({
               <Check aria-hidden="true" size={18} />
             </button>
           </div>
-        ) : (
+        ) : headerMeta ? (
           <div className="store-meta">
             <span className="status-dot" aria-hidden="true" />
-            <strong>{statusLabel}</strong>
+            <strong>{headerMeta}</strong>
           </div>
-        )}
+        ) : null}
       </header>
 
       <div className="mobile-management-tabs" aria-label="商品管理功能">
@@ -1289,6 +1320,9 @@ function ProductManagementModule({
 function CatalogModule({ categories, onEditProduct, products, subCategories }: CatalogModuleProps) {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [selectedCategoryId, setSelectedCategoryId] = useState('all')
+  const catalogListRef = useRef<HTMLDivElement | null>(null)
+  const scrollFrameRef = useRef<number | null>(null)
+  const scrollVelocityRef = useRef(0)
 
   const keyword = searchKeyword.trim().toLowerCase()
   const catalogRows = useMemo(
@@ -1309,6 +1343,59 @@ function CatalogModule({ categories, onEditProduct, products, subCategories }: C
   const onShelfCount = products.filter((product) => product.stock > 0).length
   const offShelfCandidateCount = products.filter((product) => product.stock === 0).length
   const promoCount = products.filter((product) => Boolean(product.originalPrice)).length
+
+  const stopCatalogAutoScroll = () => {
+    scrollVelocityRef.current = 0
+
+    if (scrollFrameRef.current !== null) {
+      cancelAnimationFrame(scrollFrameRef.current)
+      scrollFrameRef.current = null
+    }
+  }
+
+  const runCatalogAutoScroll = () => {
+    const list = catalogListRef.current
+
+    if (!list || scrollVelocityRef.current === 0) {
+      scrollFrameRef.current = null
+      return
+    }
+
+    list.scrollTop += scrollVelocityRef.current
+    scrollFrameRef.current = requestAnimationFrame(runCatalogAutoScroll)
+  }
+
+  const handleCatalogPointerMove = (event: MouseEvent<HTMLDivElement>) => {
+    const list = catalogListRef.current
+
+    if (!list) return
+
+    const edgeSize = 96
+    const rect = list.getBoundingClientRect()
+    const distanceToTop = event.clientY - rect.top
+    const distanceToBottom = rect.bottom - event.clientY
+    const maxVelocity = 9
+    let nextVelocity = 0
+
+    if (distanceToBottom < edgeSize) {
+      const intensity = Math.max(0, Math.min(1, (edgeSize - distanceToBottom) / edgeSize))
+      nextVelocity = maxVelocity * intensity * intensity
+    } else if (distanceToTop < edgeSize) {
+      const intensity = Math.max(0, Math.min(1, (edgeSize - distanceToTop) / edgeSize))
+      nextVelocity = -maxVelocity * intensity * intensity
+    }
+
+    scrollVelocityRef.current = nextVelocity
+
+    if (nextVelocity === 0) {
+      stopCatalogAutoScroll()
+      return
+    }
+
+    if (scrollFrameRef.current === null) {
+      scrollFrameRef.current = requestAnimationFrame(runCatalogAutoScroll)
+    }
+  }
 
   return (
     <div className="catalog-workspace" id="catalog">
@@ -1355,7 +1442,12 @@ function CatalogModule({ categories, onEditProduct, products, subCategories }: C
           </label>
         </div>
 
-        <div className="catalog-list">
+        <div
+          className="catalog-list"
+          onMouseLeave={stopCatalogAutoScroll}
+          onMouseMove={handleCatalogPointerMove}
+          ref={catalogListRef}
+        >
           {catalogRows.map((product) => {
             const category = categories.find((item) => item.id === product.categoryId)
             const subCategory = subCategories.find((item) => item.id === product.subCategoryId)
@@ -1365,6 +1457,8 @@ function CatalogModule({ categories, onEditProduct, products, subCategories }: C
               <article
                 className="catalog-item"
                 key={product.id}
+                onPointerLeave={resetLiquidLens}
+                onPointerMove={updateLiquidLens}
                 style={{ backgroundImage: `linear-gradient(90deg, rgba(255, 255, 255, 0.78) 0%, rgba(255, 255, 255, 0.92) 38%, rgba(255, 255, 255, 0.98) 100%), url(${product.image})` }}
               >
                 <img alt={product.name} src={product.image} />
@@ -1442,6 +1536,7 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
     origin: '',
     description: '',
   })
+  const [formError, setFormError] = useState('')
 
   const selectedCategory = categories.find((category) => category.name === normalizeName(categoryLevels[0] ?? ''))
   const availableSubCategories = selectedCategory
@@ -1453,6 +1548,7 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
   )
 
   const updateDraft = (field: keyof typeof draft, value: string) => {
+    setFormError('')
     setDraft((current) => {
       if (field === 'categoryName') {
         const nextCategory = categories.find((category) => category.name === normalizeName(value))
@@ -1477,6 +1573,7 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
       : undefined
 
     setCategoryLevels([nextDefaultCategory?.name ?? '', nextDefaultSubCategory?.name ?? ''])
+    setFormError('')
 
     setDraft({
       name: '',
@@ -1495,6 +1592,7 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
   }
 
   const updateCategoryLevel = (index: number, value: string) => {
+    setFormError('')
     setCategoryLevels((current) => {
       const next = [...current]
       next[index] = value
@@ -1513,10 +1611,12 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
   }
 
   const addCategoryLevel = () => {
+    setFormError('')
     setCategoryLevels((current) => [...current, ''])
   }
 
   const removeCategoryLevel = (index: number) => {
+    setFormError('')
     setCategoryLevels((current) => current.filter((_, levelIndex) => levelIndex !== index))
   }
 
@@ -1543,19 +1643,36 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
       .map((tag) => tag.trim())
       .filter(Boolean)
     const name = draft.name.trim()
+    const price = Number(draft.price)
+    const stock = Number(draft.stock)
     const fallbackDescription = '新录入商品，可在商品资料中继续完善陈列、保存与推荐信息。'
 
+    if (!name) {
+      setFormError('请先填写商品名称，避免提交空商品。')
+      return
+    }
+
+    if (draft.price.trim() === '' || Number.isNaN(price) || price <= 0) {
+      setFormError('请填写有效售价，售价需要大于 0。')
+      return
+    }
+
+    if (draft.stock.trim() === '' || Number.isNaN(stock) || stock < 0) {
+      setFormError('请填写有效初始库存，库存不能小于 0。')
+      return
+    }
+
     onCreateProduct({
-      name: name || '未命名商品',
+      name,
       categoryName: categoryLevels[0],
       subCategoryName: categoryLevels.slice(1).map(normalizeName).filter(Boolean).join(' / ') || availableSubCategories[0]?.name || '',
       image:
         imagePreview ||
         'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=640&q=80',
       spec: draft.spec.trim() || '常规属性',
-      price: Number(draft.price) || 0,
+      price,
       originalPrice: draft.originalPrice.trim() ? Number(draft.originalPrice) || undefined : undefined,
-      stock: Number(draft.stock) || 0,
+      stock,
       unit: draft.unit.trim() || '件',
       tags: tags.length > 0 ? tags : undefined,
       origin: draft.origin.trim() || '待补充',
@@ -1577,9 +1694,17 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
 
   return (
     <section className="create-product-panel" aria-label="新增商品表单">
+      {formError ? (
+        <div className="product-form-alert" role="alert">
+          <TriangleAlert aria-hidden="true" size={16} />
+          <span>{formError}</span>
+        </div>
+      ) : null}
+
       <form
         className="product-form"
         id="create-product-form"
+        noValidate
         onReset={(event) => {
           event.preventDefault()
           resetDraft()
@@ -1592,7 +1717,12 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
             <div className="product-form-grid single-column">
               <label>
                 <span>商品名称</span>
-                <input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder="例如：有机西兰花" />
+                <input
+                  aria-invalid={formError.includes('商品名称') || undefined}
+                  value={draft.name}
+                  onChange={(event) => updateDraft('name', event.target.value)}
+                  placeholder="例如：有机西兰花"
+                />
               </label>
             </div>
           </fieldset>
@@ -1655,7 +1785,14 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
             <div className="product-form-grid">
               <label>
                 <span>售价</span>
-                <input min={0} value={draft.price} onChange={(event) => updateDraft('price', event.target.value)} placeholder="0.00" type="number" />
+                <input
+                  aria-invalid={formError.includes('售价') || undefined}
+                  min={0}
+                  value={draft.price}
+                  onChange={(event) => updateDraft('price', event.target.value)}
+                  placeholder="0.00"
+                  type="number"
+                />
               </label>
               <label>
                 <span>原价</span>
@@ -1669,7 +1806,14 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
               </label>
               <label>
                 <span>初始库存</span>
-                <input min={0} value={draft.stock} onChange={(event) => updateDraft('stock', event.target.value)} placeholder="0" type="number" />
+                <input
+                  aria-invalid={formError.includes('库存') || undefined}
+                  min={0}
+                  value={draft.stock}
+                  onChange={(event) => updateDraft('stock', event.target.value)}
+                  placeholder="0"
+                  type="number"
+                />
               </label>
               <label>
                 <span>产地</span>
@@ -1728,6 +1872,38 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
             </div>
           </div>
 
+          <div className="product-preview-card" aria-label="新增商品预览">
+            <div>
+              <span>商品预览</span>
+              <strong>{draft.name.trim() || '未命名商品'}</strong>
+            </div>
+            <dl>
+              <div>
+                <dt>分类</dt>
+                <dd>
+                  {selectedCategory?.name ?? (normalizeName(categoryLevels[0] ?? '') || '新分类')}
+                  <span>/</span>
+                  {selectedSubCategory?.name ?? (categoryLevels.slice(1).map(normalizeName).filter(Boolean).join(' / ') || '新子类')}
+                </dd>
+              </div>
+              <div>
+                <dt>售价</dt>
+                <dd>{draft.price ? `¥${Number(draft.price).toFixed(2)}` : '待填写'}</dd>
+              </div>
+              <div>
+                <dt>库存</dt>
+                <dd>
+                  {draft.stock || '0'}
+                  {draft.unit.trim() || '件'}
+                </dd>
+              </div>
+            </dl>
+          </div>
+
+          <div className="product-side-note">
+            <PackageOpen aria-hidden="true" size={18} />
+            <p>图片、名称、分类、售价和库存完善后，商品会以当前信息加入商品列表。</p>
+          </div>
         </aside>
       </form>
     </section>
