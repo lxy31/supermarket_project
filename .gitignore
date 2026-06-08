@@ -14,5 +14,6 @@ pnpm-debug.log*
 
 .vite/
 coverage/
+.idea/
 
 *.local
