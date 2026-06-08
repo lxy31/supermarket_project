@@ -27,6 +27,7 @@ type Product = {
   price: number
   originalPrice?: number
   stock: number
+  shelfStatus?: 'on' | 'off'
   unit: string
   tags?: string[]
   origin: string
@@ -401,6 +402,8 @@ function App() {
     const keyword = searchKeyword.trim().toLowerCase()
 
     const filtered = products.filter((product) => {
+      if (product.shelfStatus === 'off') return false
+
       const matchesCategory = selectedCategoryId === 'all' || product.categoryId === selectedCategoryId
       const matchesSubCategory = selectedSubCategoryId === 'all' || product.subCategoryId === selectedSubCategoryId
       const matchesSearch =
@@ -448,7 +451,7 @@ function App() {
 
   const setProductQuantity = (productId: string, nextQuantity: number) => {
     const product = products.find((candidate) => candidate.id === productId)
-    if (!product || product.stock === 0) return
+    if (!product || product.stock === 0 || product.shelfStatus === 'off') return
 
     const safeQuantity = Math.max(0, Math.min(nextQuantity, product.stock))
     setCartItems((current) => {
@@ -489,6 +492,16 @@ function App() {
         .map((item) => (item.productId === productId ? { ...item, quantity: Math.min(item.quantity, safeStock) } : item))
         .filter((item) => item.quantity > 0),
     )
+  }
+
+  const updateProductShelfStatus = (productId: string, shelfStatus: Product['shelfStatus']) => {
+    setProducts((current) =>
+      current.map((product) => (product.id === productId ? { ...product, shelfStatus } : product)),
+    )
+
+    if (shelfStatus === 'off') {
+      setCartItems((current) => current.filter((item) => item.productId !== productId))
+    }
   }
 
   const saveProduct = (updatedProduct: Product) => {
@@ -889,6 +902,7 @@ function App() {
           categories={categories}
           onEditProduct={setEditingProduct}
           onCreateProduct={createProduct}
+          onShelfStatusChange={updateProductShelfStatus}
           onStockChange={updateProductStock}
           onTabChange={setActiveManagementTab}
           products={products}
@@ -1228,6 +1242,7 @@ type ProductManagementModuleProps = {
   categories: Category[]
   onCreateProduct: (product: NewProductInput) => void
   onEditProduct: (product: Product) => void
+  onShelfStatusChange: (productId: string, shelfStatus: Product['shelfStatus']) => void
   onStockChange: (productId: string, stock: number) => void
   onTabChange: (tab: ManagementTab) => void
   products: Product[]
@@ -1239,6 +1254,7 @@ function ProductManagementModule({
   categories,
   onCreateProduct,
   onEditProduct,
+  onShelfStatusChange,
   onStockChange,
   onTabChange,
   products,
@@ -1309,7 +1325,13 @@ function ProductManagementModule({
       ) : activeTab === 'create' ? (
         <CreateProductPanel categories={categories} onCreateProduct={onCreateProduct} subCategories={subCategories} />
       ) : activeTab === 'offShelf' ? (
-        <OffShelfPanel products={products} />
+        <OffShelfPanel
+          categories={categories}
+          onEditProduct={onEditProduct}
+          onShelfStatusChange={onShelfStatusChange}
+          products={products}
+          subCategories={subCategories}
+        />
       ) : (
         <InventoryModule categories={categories} products={products} onStockChange={onStockChange} subCategories={subCategories} />
       )}
@@ -1911,12 +1933,65 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
 }
 
 type OffShelfPanelProps = {
+  categories: Category[]
+  onEditProduct: (product: Product) => void
+  onShelfStatusChange: (productId: string, shelfStatus: Product['shelfStatus']) => void
   products: Product[]
+  subCategories: SubCategory[]
 }
 
-function OffShelfPanel({ products }: OffShelfPanelProps) {
-  const offShelfCandidates = products.filter((product) => product.stock === 0)
-  const activeProducts = products.filter((product) => product.stock > 0)
+type OffShelfFilter = 'all' | 'pending' | 'review' | 'off'
+
+const getShelfState = (product: Product) => {
+  if (product.shelfStatus === 'off') return { key: 'off' as const, label: '已下架', tone: 'danger' }
+  if (product.stock === 0) return { key: 'pending' as const, label: '缺货待处理', tone: 'danger' }
+  if (product.stock <= 8 && product.shelfStatus !== 'on') {
+    return { key: 'review' as const, label: '低库存复核', tone: 'warning' }
+  }
+  return { key: 'active' as const, label: '可售', tone: 'success' }
+}
+
+function OffShelfPanel({ categories, onEditProduct, onShelfStatusChange, products, subCategories }: OffShelfPanelProps) {
+  const [searchKeyword, setSearchKeyword] = useState('')
+  const [selectedCategoryId, setSelectedCategoryId] = useState('all')
+  const [activeFilter, setActiveFilter] = useState<OffShelfFilter>('all')
+
+  const keyword = searchKeyword.trim().toLowerCase()
+  const pendingCount = products.filter((product) => getShelfState(product).key === 'pending').length
+  const reviewCount = products.filter((product) => getShelfState(product).key === 'review').length
+  const offShelfCount = products.filter((product) => getShelfState(product).key === 'off').length
+  const activeCount = products.filter((product) => getShelfState(product).key === 'active').length
+  const offShelfValue = products
+    .filter((product) => getShelfState(product).key === 'off')
+    .reduce((sum, product) => sum + product.price * product.stock, 0)
+
+  const offShelfFilters = [
+    { value: 'all', label: '全部商品', count: products.length },
+    { value: 'pending', label: '缺货待处理', count: pendingCount },
+    { value: 'review', label: '低库存复核', count: reviewCount },
+    { value: 'off', label: '已下架', count: offShelfCount },
+  ] as const
+
+  const offShelfRows = useMemo(
+    () =>
+      products.filter((product) => {
+        const state = getShelfState(product)
+        const category = categories.find((item) => item.id === product.categoryId)
+        const subCategory = subCategories.find((item) => item.id === product.subCategoryId)
+        const matchesCategory = selectedCategoryId === 'all' || product.categoryId === selectedCategoryId
+        const matchesStatus = activeFilter === 'all' || state.key === activeFilter
+        const matchesSearch =
+          !keyword ||
+          product.name.toLowerCase().includes(keyword) ||
+          product.spec.toLowerCase().includes(keyword) ||
+          product.origin.toLowerCase().includes(keyword) ||
+          category?.name.toLowerCase().includes(keyword) ||
+          subCategory?.name.toLowerCase().includes(keyword)
+
+        return matchesCategory && matchesStatus && matchesSearch
+      }),
+    [activeFilter, categories, keyword, products, selectedCategoryId, subCategories],
+  )
 
   return (
     <section className="off-shelf-panel" aria-label="下架管理">
@@ -1927,35 +2002,131 @@ function OffShelfPanel({ products }: OffShelfPanelProps) {
         </div>
       </div>
 
-      <div className="off-shelf-layout">
-        <div className="off-shelf-column">
-          <h3>待处理</h3>
-          {offShelfCandidates.map((product) => (
-            <article key={product.id}>
-              <img alt={product.name} src={product.image} />
-              <div>
-                <strong>{product.name}</strong>
-                <span>{product.spec} · 库存 {product.stock}</span>
-              </div>
-              <button type="button">标记下架</button>
-            </article>
-          ))}
+      <section className="off-shelf-kpis" aria-label="下架概览">
+        <article>
+          <span>缺货待处理</span>
+          <strong>{pendingCount}</strong>
+        </article>
+        <article>
+          <span>低库存复核</span>
+          <strong>{reviewCount}</strong>
+        </article>
+        <article>
+          <span>已下架</span>
+          <strong>{offShelfCount}</strong>
+        </article>
+        <article>
+          <span>可售商品</span>
+          <strong>{activeCount}</strong>
+        </article>
+      </section>
+
+      <section className="off-shelf-toolbar" aria-label="下架筛选">
+        <label className="search-box">
+          <span>搜索商品</span>
+          <input
+            value={searchKeyword}
+            onChange={(event) => setSearchKeyword(event.target.value)}
+            placeholder="商品名、规格、分类或产地"
+          />
+        </label>
+
+        <label className="inventory-select">
+          <span>分类</span>
+          <select value={selectedCategoryId} onChange={(event) => setSelectedCategoryId(event.target.value)}>
+            <option value="all">全部分类</option>
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      <div className="off-shelf-tabs" aria-label="下架状态">
+        {offShelfFilters.map((filter) => (
+          <button
+            className={activeFilter === filter.value ? 'active' : ''}
+            key={filter.value}
+            onClick={() => setActiveFilter(filter.value)}
+            type="button"
+          >
+            <span>{filter.label}</span>
+            <strong>{filter.count}</strong>
+          </button>
+        ))}
+      </div>
+
+      <section className="off-shelf-table" aria-label="下架商品列表">
+        <div className="off-shelf-table-head">
+          <span>商品</span>
+          <span>分类</span>
+          <span>库存</span>
+          <span>状态</span>
+          <span>操作</span>
         </div>
 
-        <div className="off-shelf-column">
-          <h3>可售复核</h3>
-          {activeProducts.slice(0, 5).map((product) => (
-            <article key={product.id}>
-              <img alt={product.name} src={product.image} />
-              <div>
-                <strong>{product.name}</strong>
-                <span>{product.spec} · 库存 {product.stock}</span>
-              </div>
-              <button type="button">复核</button>
-            </article>
-          ))}
+        <div className="off-shelf-table-body">
+          {offShelfRows.length > 0 ? (
+            offShelfRows.map((product) => {
+              const state = getShelfState(product)
+              const category = categories.find((item) => item.id === product.categoryId)
+              const subCategory = subCategories.find((item) => item.id === product.subCategoryId)
+
+              return (
+                <article className="off-shelf-row" key={product.id}>
+                  <div className="off-shelf-product">
+                    <img alt={product.name} src={product.image} />
+                    <div>
+                      <h3>{product.name}</h3>
+                      <p>{product.spec} · {product.origin}</p>
+                    </div>
+                  </div>
+                  <span>{category?.name} / {subCategory?.name}</span>
+                  <strong>
+                    {product.stock}
+                    {product.unit}
+                  </strong>
+                  <span className={`stock-status ${state.tone}`}>{state.label}</span>
+                  <div className="off-shelf-actions">
+                    <button aria-label={`编辑${product.name}`} onClick={() => onEditProduct(product)} type="button">
+                      编辑
+                    </button>
+                    {state.key === 'off' ? (
+                      <button className="primary-action" onClick={() => onShelfStatusChange(product.id, 'on')} type="button">
+                        恢复可售
+                      </button>
+                    ) : (
+                      <>
+                        {state.key === 'review' ? (
+                          <button className="primary-action" onClick={() => onShelfStatusChange(product.id, 'on')} type="button">
+                            复核通过
+                          </button>
+                        ) : null}
+                        <button className="danger-action" onClick={() => onShelfStatusChange(product.id, 'off')} type="button">
+                          标记下架
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </article>
+              )
+            })
+          ) : (
+            <div className="off-shelf-empty">
+              <PackageOpen aria-hidden="true" size={22} />
+              <strong>没有匹配商品</strong>
+              <span>调整搜索、分类或状态筛选后再查看。</span>
+            </div>
+          )}
         </div>
-      </div>
+      </section>
+
+      <aside className="off-shelf-note" aria-label="下架策略">
+        <TriangleAlert aria-hidden="true" size={18} />
+        <p>已下架商品会从购买页面隐藏，并自动从购物车移除。当前已下架库存金额为 {formatCurrency(offShelfValue)}。</p>
+      </aside>
     </section>
   )
 }
