@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Flame,
   ImagePlus,
+  Info,
   ListFilter,
   PackageOpen,
   Pencil,
@@ -27,7 +28,12 @@ type Product = {
   price: number
   originalPrice?: number
   stock: number
-  shelfStatus?: 'on' | 'off'
+  shelfStatus?: 'on' | 'off' | 'review'
+  shelfChange?: {
+    changedAt: string
+    note: string
+    operator: string
+  }
   unit: string
   tags?: string[]
   origin: string
@@ -77,6 +83,8 @@ const updateLiquidLens = (event: PointerEvent<HTMLElement>) => {
 const resetLiquidLens = (event: PointerEvent<HTMLElement>) => {
   event.currentTarget.style.removeProperty('--liquid-opacity')
 }
+
+const currentOperator = '李敏'
 
 const initialCategories: Category[] = [
   { id: 'fresh', name: '生鲜果蔬', icon: 'F' },
@@ -362,10 +370,16 @@ const managementSections: Array<{ value: ManagementTab; label: string }> = [
   { value: 'inventory', label: '库存盘点' },
 ]
 
+const getOffShelfActionCount = (products: Product[]) =>
+  products.filter((product) => {
+    const state = getShelfState(product)
+    return state.key === 'pending' || state.key === 'review'
+  }).length
+
 const managementSectionMeta: Record<ManagementTab, { icon: string; count: (products: Product[]) => string }> = {
   catalog: { icon: 'L', count: (products) => String(products.length) },
   create: { icon: '+', count: () => '' },
-  offShelf: { icon: 'D', count: (products) => String(products.filter((product) => product.stock === 0).length) },
+  offShelf: { icon: 'D', count: (products) => String(getOffShelfActionCount(products)) },
   inventory: { icon: 'I', count: () => '盘点' },
 }
 
@@ -494,9 +508,27 @@ function App() {
     )
   }
 
-  const updateProductShelfStatus = (productId: string, shelfStatus: Product['shelfStatus']) => {
+  const updateProductShelfStatus = (productId: string, shelfStatus: Product['shelfStatus'], note: string) => {
+    const changedAt = new Intl.DateTimeFormat('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date())
     setProducts((current) =>
-      current.map((product) => (product.id === productId ? { ...product, shelfStatus } : product)),
+      current.map((product) =>
+        product.id === productId
+          ? {
+              ...product,
+              shelfChange: {
+                changedAt,
+                note,
+                operator: currentOperator,
+              },
+              shelfStatus,
+            }
+          : product,
+      ),
     )
 
     if (shelfStatus === 'off') {
@@ -707,7 +739,7 @@ function App() {
             <h1>商品购买</h1>
             <div className="store-context" aria-label="门店信息">
               <span>人民路店</span>
-              <span>收银员：李敏</span>
+              <span>收银员：{currentOperator}</span>
             </div>
           </div>
 
@@ -1242,7 +1274,7 @@ type ProductManagementModuleProps = {
   categories: Category[]
   onCreateProduct: (product: NewProductInput) => void
   onEditProduct: (product: Product) => void
-  onShelfStatusChange: (productId: string, shelfStatus: Product['shelfStatus']) => void
+  onShelfStatusChange: (productId: string, shelfStatus: Product['shelfStatus'], note: string) => void
   onStockChange: (productId: string, stock: number) => void
   onTabChange: (tab: ManagementTab) => void
   products: Product[]
@@ -1261,12 +1293,14 @@ function ProductManagementModule({
   subCategories,
 }: ProductManagementModuleProps) {
   const statusLabel = managementSections.find((section) => section.value === activeTab)?.label ?? '商品列表'
-  const offShelfCandidateCount = products.filter((product) => product.stock === 0).length
+  const pendingShelfCount = products.filter((product) => getShelfState(product).key === 'pending').length
+  const reviewShelfCount = products.filter((product) => getShelfState(product).key === 'review').length
+  const pendingActionCount = pendingShelfCount + reviewShelfCount
   const headerMeta =
     activeTab === 'catalog'
       ? ''
       : activeTab === 'offShelf'
-        ? `${offShelfCandidateCount} 个待处理`
+        ? `共 ${products.length} 件商品`
         : activeTab === 'inventory'
           ? '库存盘点'
           : statusLabel
@@ -1300,7 +1334,11 @@ function ProductManagementModule({
             </button>
           </div>
         ) : headerMeta ? (
-          <div className="store-meta">
+          <div
+            className="store-meta"
+            title={activeTab === 'offShelf' ? `待处理 ${pendingActionCount}：缺货 ${pendingShelfCount} + 复核 ${reviewShelfCount}` : undefined}
+            aria-label={activeTab === 'offShelf' ? `商品总数 ${products.length} 件，待处理 ${pendingActionCount} 个` : undefined}
+          >
             <span className="status-dot" aria-hidden="true" />
             <strong>{headerMeta}</strong>
           </div>
@@ -1327,7 +1365,6 @@ function ProductManagementModule({
       ) : activeTab === 'offShelf' ? (
         <OffShelfPanel
           categories={categories}
-          onEditProduct={onEditProduct}
           onShelfStatusChange={onShelfStatusChange}
           products={products}
           subCategories={subCategories}
@@ -1934,27 +1971,35 @@ function CreateProductPanel({ categories, onCreateProduct, subCategories }: Crea
 
 type OffShelfPanelProps = {
   categories: Category[]
-  onEditProduct: (product: Product) => void
-  onShelfStatusChange: (productId: string, shelfStatus: Product['shelfStatus']) => void
+  onShelfStatusChange: (productId: string, shelfStatus: Product['shelfStatus'], note: string) => void
   products: Product[]
   subCategories: SubCategory[]
 }
 
-type OffShelfFilter = 'all' | 'pending' | 'review' | 'off'
+type OffShelfStatusFilter = 'all' | 'pending' | 'review' | 'off' | 'active'
 
 const getShelfState = (product: Product) => {
-  if (product.shelfStatus === 'off') return { key: 'off' as const, label: '已下架', tone: 'danger' }
-  if (product.stock === 0) return { key: 'pending' as const, label: '缺货待处理', tone: 'danger' }
-  if (product.stock <= 8 && product.shelfStatus !== 'on') {
-    return { key: 'review' as const, label: '低库存复核', tone: 'warning' }
+  if (product.shelfStatus === 'off') {
+    return { key: 'off' as const, label: '已下架', tone: 'danger', description: '暂无新的人工操作记录。商品已从购买页隐藏。' }
   }
-  return { key: 'active' as const, label: '可售', tone: 'success' }
+  if (product.stock === 0) {
+    return { key: 'pending' as const, label: '缺货待处理', tone: 'danger', description: '暂无人工操作记录。系统检测库存为 0，建议下架或补货后恢复销售。' }
+  }
+  if (product.shelfStatus === 'review' || (product.stock <= 8 && product.shelfStatus !== 'on')) {
+    return {
+      key: 'review' as const,
+      label: '下架复核',
+      tone: 'warning',
+      description: '暂无人工操作记录。系统提示库存偏低，建议确认是否需要下架。',
+    }
+  }
+  return { key: 'active' as const, label: '可售', tone: 'success', description: '暂无人工操作记录。当前商品库存充足，可正常销售。' }
 }
 
-function OffShelfPanel({ categories, onEditProduct, onShelfStatusChange, products, subCategories }: OffShelfPanelProps) {
+function OffShelfPanel({ categories, onShelfStatusChange, products, subCategories }: OffShelfPanelProps) {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [selectedCategoryId, setSelectedCategoryId] = useState('all')
-  const [activeFilter, setActiveFilter] = useState<OffShelfFilter>('all')
+  const [activeStatusFilter, setActiveStatusFilter] = useState<OffShelfStatusFilter>('all')
 
   const keyword = searchKeyword.trim().toLowerCase()
   const pendingCount = products.filter((product) => getShelfState(product).key === 'pending').length
@@ -1964,12 +2009,11 @@ function OffShelfPanel({ categories, onEditProduct, onShelfStatusChange, product
   const offShelfValue = products
     .filter((product) => getShelfState(product).key === 'off')
     .reduce((sum, product) => sum + product.price * product.stock, 0)
-
-  const offShelfFilters = [
-    { value: 'all', label: '全部商品', count: products.length },
+  const kpiFilters = [
     { value: 'pending', label: '缺货待处理', count: pendingCount },
-    { value: 'review', label: '低库存复核', count: reviewCount },
+    { value: 'review', label: '下架复核', count: reviewCount },
     { value: 'off', label: '已下架', count: offShelfCount },
+    { value: 'active', label: '可售商品', count: activeCount },
   ] as const
 
   const offShelfRows = useMemo(
@@ -1979,7 +2023,7 @@ function OffShelfPanel({ categories, onEditProduct, onShelfStatusChange, product
         const category = categories.find((item) => item.id === product.categoryId)
         const subCategory = subCategories.find((item) => item.id === product.subCategoryId)
         const matchesCategory = selectedCategoryId === 'all' || product.categoryId === selectedCategoryId
-        const matchesStatus = activeFilter === 'all' || state.key === activeFilter
+        const matchesStatus = activeStatusFilter === 'all' || state.key === activeStatusFilter
         const matchesSearch =
           !keyword ||
           product.name.toLowerCase().includes(keyword) ||
@@ -1990,35 +2034,27 @@ function OffShelfPanel({ categories, onEditProduct, onShelfStatusChange, product
 
         return matchesCategory && matchesStatus && matchesSearch
       }),
-    [activeFilter, categories, keyword, products, selectedCategoryId, subCategories],
+    [activeStatusFilter, categories, keyword, products, selectedCategoryId, subCategories],
   )
 
   return (
     <section className="off-shelf-panel" aria-label="下架管理">
-      <div className="section-heading">
-        <div>
-          <h2>下架管理</h2>
-          <span>缺货商品优先处理，仍有库存的商品可先做人工复核</span>
-        </div>
-      </div>
-
       <section className="off-shelf-kpis" aria-label="下架概览">
-        <article>
-          <span>缺货待处理</span>
-          <strong>{pendingCount}</strong>
-        </article>
-        <article>
-          <span>低库存复核</span>
-          <strong>{reviewCount}</strong>
-        </article>
-        <article>
-          <span>已下架</span>
-          <strong>{offShelfCount}</strong>
-        </article>
-        <article>
-          <span>可售商品</span>
-          <strong>{activeCount}</strong>
-        </article>
+        {kpiFilters.map((filter) => (
+          <button
+            aria-pressed={activeStatusFilter === filter.value}
+            className={activeStatusFilter === filter.value ? 'active' : ''}
+            key={filter.value}
+            onClick={() => {
+              setSelectedCategoryId('all')
+              setActiveStatusFilter((current) => (current === filter.value ? 'all' : filter.value))
+            }}
+            type="button"
+          >
+            <span>{filter.label}</span>
+            <strong>{filter.count}</strong>
+          </button>
+        ))}
       </section>
 
       <section className="off-shelf-toolbar" aria-label="下架筛选">
@@ -2027,7 +2063,7 @@ function OffShelfPanel({ categories, onEditProduct, onShelfStatusChange, product
           <input
             value={searchKeyword}
             onChange={(event) => setSearchKeyword(event.target.value)}
-            placeholder="商品名、规格、分类或产地"
+            placeholder="商品名、规格或分类"
           />
         </label>
 
@@ -2044,27 +2080,13 @@ function OffShelfPanel({ categories, onEditProduct, onShelfStatusChange, product
         </label>
       </section>
 
-      <div className="off-shelf-tabs" aria-label="下架状态">
-        {offShelfFilters.map((filter) => (
-          <button
-            className={activeFilter === filter.value ? 'active' : ''}
-            key={filter.value}
-            onClick={() => setActiveFilter(filter.value)}
-            type="button"
-          >
-            <span>{filter.label}</span>
-            <strong>{filter.count}</strong>
-          </button>
-        ))}
-      </div>
-
       <section className="off-shelf-table" aria-label="下架商品列表">
         <div className="off-shelf-table-head">
           <span>商品</span>
           <span>分类</span>
           <span>库存</span>
           <span>状态</span>
-          <span>操作</span>
+          <span>状态</span>
         </div>
 
         <div className="off-shelf-table-body">
@@ -2073,6 +2095,9 @@ function OffShelfPanel({ categories, onEditProduct, onShelfStatusChange, product
               const state = getShelfState(product)
               const category = categories.find((item) => item.id === product.categoryId)
               const subCategory = subCategories.find((item) => item.id === product.subCategoryId)
+              const statusDetail = product.shelfChange
+                ? `最近操作：${product.shelfChange.operator} ${product.shelfChange.changedAt}，${product.shelfChange.note}。`
+                : state.description
 
               return (
                 <article className="off-shelf-row" key={product.id}>
@@ -2088,24 +2113,64 @@ function OffShelfPanel({ categories, onEditProduct, onShelfStatusChange, product
                     {product.stock}
                     {product.unit}
                   </strong>
-                  <span className={`stock-status ${state.tone}`}>{state.label}</span>
-                  <div className="off-shelf-actions">
-                    <button aria-label={`编辑${product.name}`} onClick={() => onEditProduct(product)} type="button">
-                      编辑
+                  <div className="off-shelf-status-cell">
+                    <span className={`stock-status ${state.tone}`}>{state.label}</span>
+                    <button
+                      aria-label={`${product.name}操作记录：${statusDetail}`}
+                      className="status-info"
+                      title={statusDetail}
+                      type="button"
+                    >
+                      <Info aria-hidden="true" size={13} />
                     </button>
+                  </div>
+                  <div className="off-shelf-actions">
                     {state.key === 'off' ? (
-                      <button className="primary-action" onClick={() => onShelfStatusChange(product.id, 'on')} type="button">
-                        恢复可售
+                      <button
+                        aria-label={`恢复${product.name}为可售`}
+                        className="restore-action"
+                        onClick={() => onShelfStatusChange(product.id, 'on', '恢复到购买页可售')}
+                        title="恢复"
+                        type="button"
+                      >
+                        <RotateCcw aria-hidden="true" size={16} />
+                        <span className="visually-hidden">恢复可售</span>
                       </button>
                     ) : (
                       <>
                         {state.key === 'review' ? (
-                          <button className="primary-action" onClick={() => onShelfStatusChange(product.id, 'on')} type="button">
-                            复核通过
+                          <button
+                            aria-label={`复核通过${product.name}`}
+                            className="approve-action"
+                            onClick={() => onShelfStatusChange(product.id, 'on', '下架复核通过，保持可售')}
+                            title="通过"
+                            type="button"
+                          >
+                            <Check aria-hidden="true" size={16} />
+                            <span className="visually-hidden">复核通过</span>
                           </button>
                         ) : null}
-                        <button className="danger-action" onClick={() => onShelfStatusChange(product.id, 'off')} type="button">
-                          标记下架
+                        {state.key === 'active' ? (
+                          <button
+                            aria-label={`转入复核${product.name}`}
+                            className="review-action"
+                            onClick={() => onShelfStatusChange(product.id, 'review', '人工转入复核，待确认是否继续销售')}
+                            title="复核"
+                            type="button"
+                          >
+                            <ListFilter aria-hidden="true" size={16} />
+                            <span className="visually-hidden">转入复核</span>
+                          </button>
+                        ) : null}
+                        <button
+                          aria-label={`标记${product.name}下架`}
+                          className="shelve-action"
+                          onClick={() => onShelfStatusChange(product.id, 'off', '人工标记下架，从购买页隐藏')}
+                          title="下架"
+                          type="button"
+                        >
+                          <X aria-hidden="true" size={16} />
+                          <span className="visually-hidden">标记下架</span>
                         </button>
                       </>
                     )}
